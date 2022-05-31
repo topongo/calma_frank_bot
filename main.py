@@ -1,8 +1,8 @@
 import bot_commands
 import re
 from bot_key import key
-from utils import Filter, Condition, wait_for
-from telebotapi import TelegramBot
+from utils import Filter, Condition, wait_for, Forks
+from telebotapi import TelegramBot, File as TBotFile
 from json import load, dump
 from os.path import exists
 from typing import Union
@@ -36,6 +36,21 @@ class CommandStore:
     class Response:
         def fire(self, tbot, to, msg, data=None):
             pass
+
+        @staticmethod
+        def detect(data: dict):
+            if data["type"] == "function":
+                return CommandStore.Function(data["call"], data["additional_arguments"])
+            elif data["type"] == "photo":
+                return CommandStore.Photo(data["photo"])
+            elif data["type"] == "text":
+                return CommandStore.Text(data["text"])
+            elif data["type"] == "sticker":
+                return CommandStore.Sticker(data["sticker"])
+            elif data["type"] == "audio":
+                return CommandStore.Audio(data["audio"])
+            else:
+                raise TypeError(data)
 
     class Function(Response):
         def __init__(self, call: callable, additional_arguments=None):
@@ -94,7 +109,7 @@ class CommandStore:
                 return self.text == other.text
 
     class Sticker(Response):
-        def __init__(self, sticker: TelegramBot.Sticker):
+        def __init__(self, sticker: TelegramBot.Update.Sticker):
             self.sticker = sticker
 
         def fire(self, tbot, to, msg, data=None):
@@ -129,8 +144,12 @@ class CommandStore:
 
         @staticmethod
         def detect(data: dict):
+            response = CommandStore.Response.detect(data["response"])
+
             if data["type"] == "trap":
-                return CommandStore.Trap(data["response"], data["regex"])
+                return CommandStore.Trap(response, data["regex"])
+            elif data["type"] == "bot_command":
+                return CommandStore.BotCommand(response, data["regex"])
 
         def dump_all(self, type_, **other):
             if type_ is None:
@@ -175,16 +194,14 @@ class CommandStore:
             elif isinstance(other, TelegramBot.Update.Message):
                 return self.command in other.text
 
+        def dump(self):
+            return super().dump_all("bot_command", command=self.command)
+
     def __init__(self, data=None):
         self.commands = []
         if data:
             for d in data:
-                if isinstance(d, dict):
-                    self.commands.append(CommandStore.Command.detect(d))
-                elif isinstance(d, CommandStore.Command):
-                    self.commands.append(d)
-                else:
-                    raise TypeError(d)
+                self.add(d)
 
     def dump(self):
         return [
@@ -193,8 +210,27 @@ class CommandStore:
             if not isinstance(d, CommandStore.BotCommand)
         ]
 
+    def add(self, data):
+        if isinstance(data, CommandStore.Command):
+            self.commands.append(data)
+        elif isinstance(data, dict):
+            response = CommandStore.Response.detect(data["response"])
+
+            if data["type"] == "trap":
+                return CommandStore.Trap(response, data["regex"])
+            elif data["type"] == "bot_command":
+                return CommandStore.BotCommand(response, data["regex"])
+
+
+def dump_to_json(file=None):
+    if not file:
+        file = "data.json"
+    dump({"normal": commands.dump(), "admin": admin_commands.dump()}, open("data.json", "w+"))
+
 
 if __name__ == "__main__":
+    forks = Forks()
+
     if exists("data.json"):
         raw_data = load(open("data.json"))
         commands = CommandStore(raw_data["normal"])
@@ -202,10 +238,10 @@ if __name__ == "__main__":
     else:
         commands = CommandStore()
         admin_commands = CommandStore()
-        dump({"normal": commands.dump(), "admin": admin_commands.dump()}, open("data.json", "w+"))
+        dump_to_json()
 
     admin_commands.commands.append(CommandStore.BotCommand(
-        CommandStore.Function(bot_commands.add_command, {"commands": commands}),
+        CommandStore.Function(bot_commands.add_command, {"commands": commands, "forks": forks, "dump_to_json": dump_to_json}),
         "/add_command")
     )
 
@@ -214,10 +250,12 @@ if __name__ == "__main__":
         r".*(patta|bodo|lorenzo|degra).*"
     ))
 
-    """commands.commands.append(CommandStore.Trap(
-        CommandStore.Sticker(),
+    commands.commands.append(CommandStore.Trap(
+        CommandStore.Sticker(
+            TelegramBot.Update.Sticker.from_id(
+                "CAACAgQAAx0CYOWbIQADFmKUkeerJpymCT9Fl5zA4Tx0i4wbAALQAAOeQjse6LIcHW6-2gYkBA")),
         r".*calma\sfrank.*"
-    ))"""
+    ))
 
     t.bootstrap()
 
@@ -230,11 +268,11 @@ if __name__ == "__main__":
             Filter(lambda l: l.chat in CHATS),
             callback=command_dispatcher
         ),
-        Condition(
-            Filter(lambda l: True),
-            callback=lambda l: print(l.sticker)
-        )
+        # Condition(
+        #     Filter(lambda l: isinstance(l, TelegramBot.Update.Sticker)),
+        #     callback=lambda l: print(l.file.raw)
+        # )
     ]
 
-    wait_for(t, *conditions)
+    wait_for(t, *conditions, forks=forks, timeout=0)
 

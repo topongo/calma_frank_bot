@@ -3,6 +3,7 @@ from inspect import getsource
 from datetime import datetime, timedelta
 from telebotapi import TelegramBot
 from time import sleep
+from uuid import uuid4
 
 
 class Filter:
@@ -45,13 +46,61 @@ class Condition:
         return str(self)
 
 
+class Fork:
+    def __init__(self, condition, completed):
+        self.condition = condition
+        self.completed = completed
+        self.result = None
+        self.done = False
+
+    def process(self, u_: TelegramBot.Update):
+        if self.done:
+            return
+        if self.condition.meet(u_.content):
+            self.condition.callback(u_.content)
+        if self.completed.meet(u_.content):
+            self.done = True
+        else:
+            print(":: warning: fork is completed, but still running")
+
+    def join(self):
+        while not self.done:
+            sleep(.2)
+
+
+class Forks:
+    def __init__(self):
+        self.forks = {}
+
+    def attach(self, cond: Condition, completed: Condition):
+        u_ = uuid4()
+        self.forks[u_] = Fork(cond, completed)
+        return u_
+
+    def detach(self, id_):
+        self.forks.pop(id_)
+
+    def send(self, u_: TelegramBot.Update):
+        for id_, f in self.forks.items():
+            f.process(u_)
+
+    def get(self, id_) -> Fork:
+        return self.forks[id_]
+
+
 def wait_for(t: TelegramBot,
              *conditions: Condition,
-             timeout=300):
+             timeout=300,
+             forks=None):
 
     t.daemon.delay = 0.5
 
-    timeout_end = datetime.now() + timedelta(seconds=timeout)
+    if timeout == 0:
+        infinite = True
+        timeout_end = datetime.now()
+    else:
+        infinite = False
+        timeout_end = datetime.now() + timedelta(seconds=timeout)
 
     while True:
         for u in t.get_updates():
@@ -63,6 +112,9 @@ def wait_for(t: TelegramBot,
                             return c.stop_return(u.content)
                         else:
                             return c.stop_return
-        if timeout_end < datetime.now():
+                    continue
+            if forks:
+                forks.send(u)
+        if not infinite and timeout_end < datetime.now():
             return False
         sleep(0.1)
