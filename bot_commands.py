@@ -98,8 +98,8 @@ def add_command(m, t: TelegramBot, commands: CommandStore, forks: Forks, dump_to
         forks.get(id_).join()
         forks.detach(id_)
         print(f"About to add this command: {new_command}")
-        input()
         commands.add(new_command)
+        dump_to_json()
 
     Thread(target=run, args=(m, t, commands), daemon=True).start()
 
